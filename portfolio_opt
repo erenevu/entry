@@ -1,0 +1,84 @@
+import pandas as pd
+import pandasql as ps
+
+         
+df_balance = pd.read_csv(r"/Users/Main/Downloads/data_origin/FS_sp500_balsheets.csv")
+df_cashflow = pd.read_csv(r"/Users/Main/Downloads/data_origin/FS_sp500_flow.csv")
+df_income = pd.read_csv(r"/Users/Main/Downloads/data_origin/FS_sp500_income.csv")
+df_addstats = pd.read_csv(r"/Users/Main/Downloads/data_origin/FS_sp500_addstats.csv")
+df_stats = pd.read_csv(r"/Users/Main/Downloads/data_origin/FS_sp500_stats.csv")
+
+
+sql_query1 = '''
+SELECT Ticker AS ticker1, 
+    SUM(CASE WHEN Attribute = "Gross Profit (ttm)" THEN Final END) AS gross_profit, 
+    SUM(CASE WHEN Attribute = "EBITDA" THEN Final END) AS ebitda,  
+    SUM(CASE WHEN Attribute = "Revenue (ttm)" THEN Final END) AS revenue,
+    SUM(CASE WHEN Attribute = "Total Debt (mrq)" THEN Final END) AS total_debt,
+    SUM(CASE WHEN Attribute = "Total Cash (mrq)" THEN Final END) AS cash
+FROM df_addstats
+GROUP BY Ticker
+'''
+df_addstats = ps.sqldf(sql_query1, locals())
+
+sql_query2 = '''
+SELECT Ticker AS ticker2, 
+    SUM(CASE WHEN Breakdown = "netIncome" THEN Recent END) AS net_income, 
+    SUM(CASE WHEN Breakdown = "capitalExpenditures" THEN Recent END) AS capex
+FROM df_cashflow
+GROUP BY Ticker
+'''
+
+df_cashflow = ps.sqldf(sql_query2, locals())
+
+sql_query3 = '''
+SELECT Ticker AS ticker3, 
+    SUM(CASE WHEN Breakdown = "totalAssets" THEN Recent END) AS total_asset, 
+    SUM(CASE WHEN Breakdown = "totalLiab" THEN Recent END) AS total_liability
+FROM df_balance
+GROUP BY Ticker
+'''
+
+df_balance = ps.sqldf(sql_query3, locals())
+
+sql_query4 = '''
+SELECT Ticker AS ticker4, 
+    SUM(CASE WHEN Attribute = "Market Cap (intraday)" THEN Recent END) AS market_cap
+FROM df_stats
+GROUP BY Ticker
+'''
+
+df_stats = ps.sqldf(sql_query4, locals())
+
+sql_query5 = '''
+WITH sub1 AS (SELECT ticker1 as s1_ticker, ad.ebitda, ad.revenue, ad.gross_profit, (s.market_cap + ad.cash - ad.total_debt) AS ev, (ad.cash - ad.total_debt) AS net_debt
+FROM df_addstats ad
+JOIN df_stats s
+ON ad.ticker1 = s.ticker4),
+
+sub2 AS (SELECT ad.ticker1 as s2_ticker, ((ad.ebitda - c.capex)/ad.ebitda) AS fcf
+        FROM df_addstats ad
+        JOIN df_cashflow c
+        ON ad.ticker1 = c.ticker2),
+        
+sub3 AS (SELECT ev, gross_profit, revenue, ev/revenue AS ev_rev, ev/gross_profit AS ev_pro, ev/ebitda AS ev_ebitda
+        FROM sub1),
+        
+sub4 AS(SELECT ticker3, total_asset/total_liability AS current_ratio
+        FROM df_balance)
+        
+SELECT s1_ticker AS ticker, sub1.net_debt AS net_debt, sub1.ev AS ev, sub4.current_ratio AS current_ratio, sub2.fcf AS fcf, sub3.ev_rev AS ev_rev, sub3.ev_pro AS ev_pro, sub3.ev_ebitda AS ev_ebitda
+FROM sub1 
+JOIN sub2 
+ON sub1.s1_ticker = sub2.s2_ticker
+JOIN sub3
+ON sub3.ev = sub1.ev
+JOIN sub4
+ON sub4.ticker3 = sub1.s1_ticker
+WHERE ev_ebitda > 15 AND net_debt <0
+ORDER BY ev_ebitda DESC, fcf DESC, net_debt
+'''
+df_addstats = ps.sqldf(sql_query5, locals())
+
+print(df_addstats)
+
